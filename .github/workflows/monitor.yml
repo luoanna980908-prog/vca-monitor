@@ -1,0 +1,72 @@
+name: VCA 补货监控
+
+on:
+  schedule:
+    # 每 10 分钟检查一次（GitHub 的定时任务高峰期可能会延迟几分钟，属正常现象）
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式"
+        type: choice
+        default: check
+        options:
+          - check        # 正常检测
+          - test-email   # 只发测试邮件
+          - test-bark    # 只发测试 Bark 警报
+
+concurrency:
+  group: vca-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 下载代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装 Playwright
+        run: pip install -r requirements.txt
+
+      - name: 缓存浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: 安装 Chromium 浏览器
+        run: python -m playwright install --with-deps chromium
+
+      - name: 运行监控
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MODE: ${{ github.event.inputs.mode || 'check' }}
+        run: |
+          case "$MODE" in
+            test-email) python monitor.py --test-email ;;
+            test-bark)  python monitor.py --test-bark ;;
+            *)          python monitor.py ;;
+          esac
+
+      - name: 上传截图（出错或有货时）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug/
+          if-no-files-found: ignore
+          retention-days: 7
